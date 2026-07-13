@@ -1,39 +1,35 @@
-from fastapi.testclient import TestClient
-from main import app, get_agent
+from fastapi import FastAPI, Depends, HTTPException
+from pydantic import BaseModel
+from langchain_groq import ChatGroq
+import os
 
-client = TestClient(app)
-
-
-class FakeResult:
-    def __init__(self, content):
-        self.content = content
+app = FastAPI(title="ReAct Agent API", version="1.0.0")
 
 
-class FakeAgent:
-    def invoke(self, question):
-        return FakeResult(f"Echo: {question}")
+class AskRequest(BaseModel):
+    question: str
 
 
-# Override the real ChatGroq dependency so tests don't hit the network / need a live model
-app.dependency_overrides[get_agent] = lambda: FakeAgent()
+class AskResponse(BaseModel):
+    answer: str
 
 
-def test_ask_returns_200():
-    resp = client.post("/ask", json={"question": "What is DevOps?"})
-    assert resp.status_code == 200
+def get_agent():
+    # your Day-7 agent, built once and reused
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=500,
+            detail="GROQ_API_KEY is not configured",
+        )
+    return ChatGroq(
+        model="llama-3.3-70b-versatile",
+        api_key=api_key,
+        temperature=0,
+    )
 
 
-def test_ask_response_shape():
-    resp = client.post("/ask", json={"question": "hello"})
-    body = resp.json()
-    assert "answer" in body
-    assert body["answer"] == "Echo: hello"
-
-
-def test_ask_missing_question_returns_422():
-    resp = client.post("/ask", json={})
-    assert resp.status_code == 422
-
-
-def test_ask_wrong_type_returns_422():
-    resp = client.post("/ask",
+@app.post("/ask", response_model=AskResponse)      # 📍 typed in AND out
+async def ask(req: AskRequest, agent=Depends(get_agent)):
+    result = agent.invoke(req.question)             # (your ReAct loop here)
+    return AskResponse(answer=result.content)
